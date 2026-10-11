@@ -16,7 +16,12 @@ pipeline {
 
         stage('Validate Docker Compose') {
             steps {
-                sh 'docker compose config --quiet'
+                sh '''
+                    DB_USER=ci_user \
+                    DB_PASSWORD=ci_test_password \
+                    HTTP_PORT=8080 \
+                    docker compose config --quiet
+                '''
             }
         }
 
