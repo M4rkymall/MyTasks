@@ -16,14 +16,14 @@ pipeline {
 
         stage('Validate Docker Compose') {
             steps {
-                bat 'docker compose config --quiet'
+                sh 'docker compose config --quiet'
             }
         }
 
         stage('Backend Tests') {
             steps {
-                bat 'docker build --target test -t taskmgr/backend:test ./backend'
-                bat 'docker run --rm taskmgr/backend:test npm test'
+                sh 'docker build --target test -t taskmgr/backend:test ./backend'
+                sh 'docker run --rm taskmgr/backend:test npm test'
             }
         }
     }
@@ -33,7 +33,7 @@ pipeline {
             echo 'MyTasks CI pipeline completed successfully.'
         }
         failure {
-            echo 'MyTasks CI pipeline failed. Check the stage logs.'
+            echo 'MyTasks pipeline failed. Check the stage logs.'
         }
         always {
             echo 'MyTasks pipeline finished.'
