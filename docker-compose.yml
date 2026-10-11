@@ -1,0 +1,65 @@
+services:
+  proxy:
+    build: ./proxy
+    image: taskmgr/proxy:${TAG:-latest}
+    ports:
+      - "${HTTP_PORT:-8080}:80"      # the ONLY published port
+    depends_on:
+      frontend:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+    networks: [task-net]
+
+  frontend:
+    build:
+      context: ./frontend
+      target: production
+      args:
+        BUILD_NUMBER: ${TAG:-dev}
+    image: taskmgr/frontend:${TAG:-latest}
+    restart: unless-stopped
+    networks: [task-net]
+
+  backend:
+    build:
+      context: ./backend
+      target: production
+    image: taskmgr/backend:${TAG:-latest}
+    environment:
+      PORT: 3000
+      DB_FILE: /data/tasks.db
+    volumes:
+      - db-data:/data                # named volume: data survives down/up and redeploys
+    healthcheck:
+      test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
+      interval: 10s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks: [task-net]
+
+  # ---- TODO (with Backend engineer): move to a real DB container ----
+  # db:
+  #   image: postgres:16-alpine
+  #   environment:
+  #     POSTGRES_DB: tasks
+  #     POSTGRES_USER: ${DB_USER}
+  #     POSTGRES_PASSWORD: ${DB_PASSWORD}
+  #   volumes:
+  #     - pg-data:/var/lib/postgresql/data
+  #   healthcheck:
+  #     test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d tasks"]
+  #     interval: 10s
+  #     timeout: 5s
+  #     retries: 10
+  #   restart: unless-stopped
+  #   networks: [task-net]
+
+volumes:
+  db-data:
+
+networks:
+  task-net:
