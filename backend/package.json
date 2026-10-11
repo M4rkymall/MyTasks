@@ -9,6 +9,7 @@
   },
   "dependencies": {
     "express": "^4.21.2",
+    "pg": "^8.23.1",
     "sqlite3": "^5.1.7"
   },
   "devDependencies": {

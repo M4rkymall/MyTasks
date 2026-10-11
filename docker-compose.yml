@@ -1,16 +1,18 @@
+
 services:
   proxy:
     build: ./proxy
     image: taskmgr/proxy:${TAG:-latest}
     ports:
-      - "${HTTP_PORT:-8080}:80"      # the ONLY published port
+      - "${HTTP_PORT:-8080}:80"
     depends_on:
       frontend:
         condition: service_healthy
       backend:
         condition: service_healthy
     restart: unless-stopped
-    networks: [task-net]
+    networks:
+      - task-net
 
   frontend:
     build:
@@ -20,7 +22,8 @@ services:
         BUILD_NUMBER: ${TAG:-dev}
     image: taskmgr/frontend:${TAG:-latest}
     restart: unless-stopped
-    networks: [task-net]
+    networks:
+      - task-net
 
   backend:
     build:
@@ -30,8 +33,12 @@ services:
     environment:
       PORT: 3000
       DB_FILE: /data/tasks.db
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/tasks
     volumes:
-      - db-data:/data                # named volume: data survives down/up and redeploys
+      - db-data:/data
+    depends_on:
+      db:
+        condition: service_healthy
     healthcheck:
       test: ["CMD", "wget", "-qO-", "http://localhost:3000/health"]
       interval: 10s
@@ -39,27 +46,47 @@ services:
       retries: 10
       start_period: 10s
     restart: unless-stopped
-    networks: [task-net]
+    networks:
+      - task-net
 
-  # ---- TODO (with Backend engineer): move to a real DB container ----
-  # db:
-  #   image: postgres:16-alpine
-  #   environment:
-  #     POSTGRES_DB: tasks
-  #     POSTGRES_USER: ${DB_USER}
-  #     POSTGRES_PASSWORD: ${DB_PASSWORD}
-  #   volumes:
-  #     - pg-data:/var/lib/postgresql/data
-  #   healthcheck:
-  #     test: ["CMD-SHELL", "pg_isready -U $${POSTGRES_USER} -d tasks"]
-  #     interval: 10s
-  #     timeout: 5s
-  #     retries: 10
-  #   restart: unless-stopped
-  #   networks: [task-net]
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_DB: tasks
+      POSTGRES_USER: ${DB_USER:?DB_USER must be set in .env}
+      POSTGRES_PASSWORD: ${DB_PASSWORD:?DB_PASSWORD must be set in .env}
+    volumes:
+      - pg-data:/var/lib/postgresql/data
+    healthcheck:
+      test:
+        - CMD-SHELL
+        - pg_isready -U "$${POSTGRES_USER}" -d "$${POSTGRES_DB}"
+      interval: 10s
+      timeout: 5s
+      retries: 10
+      start_period: 10s
+    restart: unless-stopped
+    networks:
+      - task-net
+
+  migrate:
+    image: taskmgr/backend:migrate
+    environment:
+      DB_FILE: /data/tasks.db
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/tasks
+    volumes:
+      - db-data:/data:ro
+    depends_on:
+      db:
+        condition: service_healthy
+    networks:
+      - task-net
+    profiles:
+      - migration
 
 volumes:
   db-data:
+  pg-data:
 
 networks:
   task-net:
