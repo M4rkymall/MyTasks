@@ -14,7 +14,6 @@ pipeline {
     environment {
         COMPOSE_PROJECT_NAME = 'taskmanagement-integrated'
         LAST_GOOD_FILE = '/var/jenkins_home/mytasks-last-good-tag'
-        DEPLOY_STARTED = 'false'
     }
 
     stages {
@@ -114,16 +113,18 @@ pipeline {
                 sh '''
                     set -eu
 
-                    # Seed the first known-good version from the
-                    # currently deployed, successful build.
+                    # Remove markers left by an earlier build.
+                    rm -f deploy-started.txt previous-good-tag.txt
+
+                    # Seed the first known-good version if needed.
                     if [ ! -f "$LAST_GOOD_FILE" ]; then
                         for service in backend frontend proxy worker; do
                             docker image inspect \
-                                "taskmgr/${service}:build-7" \
+                                "taskmgr/${service}:build-8" \
                                 >/dev/null
                         done
 
-                        printf '%s\\n' "build-7" > "$LAST_GOOD_FILE"
+                        printf '%s\\n' "build-8" > "$LAST_GOOD_FILE"
                     fi
 
                     PREVIOUS_TAG=$(cat "$LAST_GOOD_FILE")
@@ -178,7 +179,11 @@ pipeline {
         stage('Deploy') {
             steps {
                 script {
-                    env.DEPLOY_STARTED = 'true'
+                    // Record that deployment is about to begin.
+                    writeFile(
+                        file: 'deploy-started.txt',
+                        text: 'true'
+                    )
                 }
 
                 withCredentials([
@@ -238,8 +243,12 @@ pipeline {
     post {
         failure {
             script {
-                if (env.DEPLOY_STARTED == 'true') {
+                if (fileExists('deploy-started.txt')) {
                     echo 'Deployment failed. Attempting rollback.'
+
+                    if (!fileExists('previous-good-tag.txt')) {
+                        error('Rollback target file is missing.')
+                    }
 
                     def previousTag = readFile(
                         'previous-good-tag.txt'
