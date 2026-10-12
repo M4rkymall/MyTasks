@@ -13,6 +13,8 @@ pipeline {
 
     environment {
         COMPOSE_PROJECT_NAME = 'taskmanagement-integrated'
+        LAST_GOOD_FILE = '/var/jenkins_home/mytasks-last-good-tag'
+        DEPLOY_STARTED = 'false'
     }
 
     stages {
@@ -31,6 +33,8 @@ pipeline {
                     DB_PASSWORD=ci_test_password \
                     HTTP_PORT=8080 \
                     docker compose config --quiet
+
+                    echo "Compose validation passed."
                 '''
             }
         }
@@ -99,6 +103,50 @@ pipeline {
                         taskmgr/backend:test \
                         npx jest --runInBand \
                         --runTestsByPath tests/postgres.test.js
+
+                    echo "PostgreSQL integration tests passed."
+                '''
+            }
+        }
+
+        stage('Prepare Rollback') {
+            steps {
+                sh '''
+                    set -eu
+
+                    # Seed the first known-good version from the
+                    # currently deployed, successful build.
+                    if [ ! -f "$LAST_GOOD_FILE" ]; then
+                        for service in backend frontend proxy worker; do
+                            docker image inspect \
+                                "taskmgr/${service}:build-7" \
+                                >/dev/null
+                        done
+
+                        printf '%s\\n' "build-7" > "$LAST_GOOD_FILE"
+                    fi
+
+                    PREVIOUS_TAG=$(cat "$LAST_GOOD_FILE")
+
+                    case "$PREVIOUS_TAG" in
+                        build-[0-9]*)
+                            ;;
+                        *)
+                            echo "Invalid known-good image tag."
+                            exit 1
+                            ;;
+                    esac
+
+                    for service in backend frontend proxy worker; do
+                        docker image inspect \
+                            "taskmgr/${service}:${PREVIOUS_TAG}" \
+                            >/dev/null
+                    done
+
+                    printf '%s\\n' "$PREVIOUS_TAG" \
+                        > previous-good-tag.txt
+
+                    echo "Verified rollback target: $PREVIOUS_TAG"
                 '''
             }
         }
@@ -119,6 +167,8 @@ pipeline {
                             docker compose \
                                 -p "$COMPOSE_PROJECT_NAME" \
                                 build
+
+                            echo "Versioned image build completed."
                         '''
                     }
                 }
@@ -127,6 +177,10 @@ pipeline {
 
         stage('Deploy') {
             steps {
+                script {
+                    env.DEPLOY_STARTED = 'true'
+                }
+
                 withCredentials([
                     usernamePassword(
                         credentialsId: 'mytasks-db-credentials',
@@ -142,6 +196,8 @@ pipeline {
                                 -p "$COMPOSE_PROJECT_NAME" \
                                 up -d --no-build --wait \
                                 --wait-timeout 120
+
+                            echo "Deployment completed."
                         '''
                     }
                 }
@@ -164,16 +220,66 @@ pipeline {
                 '''
             }
         }
+
+        stage('Mark Version as Known Good') {
+            steps {
+                sh '''
+                    set -eu
+
+                    printf '%s\\n' "build-${BUILD_NUMBER}" \
+                        > "$LAST_GOOD_FILE"
+
+                    echo "Known-good version updated to build-${BUILD_NUMBER}."
+                '''
+            }
+        }
     }
 
     post {
-        success {
-            echo 'MyTasks CI/CD pipeline completed successfully.'
+        failure {
+            script {
+                if (env.DEPLOY_STARTED == 'true') {
+                    echo 'Deployment failed. Attempting rollback.'
+
+                    def previousTag = readFile(
+                        'previous-good-tag.txt'
+                    ).trim()
+
+                    withCredentials([
+                        usernamePassword(
+                            credentialsId: 'mytasks-db-credentials',
+                            usernameVariable: 'DB_USER',
+                            passwordVariable: 'DB_PASSWORD'
+                        )
+                    ]) {
+                        withEnv(["TAG=${previousTag}"]) {
+                            sh '''
+                                set -eu
+
+                                docker compose \
+                                    -p "$COMPOSE_PROJECT_NAME" \
+                                    up -d --no-build --wait \
+                                    --wait-timeout 120
+
+                                curl -fsS \
+                                    http://host.docker.internal:8080/health
+
+                                curl -fsS \
+                                    http://host.docker.internal:8080/api/tasks \
+                                    -o /dev/null
+
+                                echo "Rollback completed and smoke tests passed."
+                            '''
+                        }
+                    }
+                } else {
+                    echo 'Failure occurred before deployment. Existing services were not redeployed.'
+                }
+            }
         }
 
-        failure {
-            echo 'Pipeline failed. Check the failed stage and Jenkins console output.'
-            echo 'Automatic rollback is not enabled in this version.'
+        success {
+            echo 'MyTasks CI/CD pipeline completed successfully.'
         }
 
         always {
