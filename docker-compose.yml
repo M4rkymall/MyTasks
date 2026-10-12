@@ -49,6 +49,20 @@ services:
     networks:
       - task-net
 
+  worker:
+    build:
+      context: ./worker
+    image: taskmgr/worker:${TAG:-latest}
+    environment:
+      DATABASE_URL: postgresql://${DB_USER}:${DB_PASSWORD}@db:5432/tasks
+      WORKER_INTERVAL_MS: 60000
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - task-net
+
   db:
     image: postgres:16-alpine
     environment:

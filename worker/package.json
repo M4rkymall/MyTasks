@@ -1,0 +1,13 @@
+{
+  "name": "mytasks-worker",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Background worker for MyTasks",
+  "main": "src/worker.js",
+  "scripts": {
+    "start": "node src/worker.js"
+  },
+  "dependencies": {
+    "pg": "8.23.1"
+  }
+}
