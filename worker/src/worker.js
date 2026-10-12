@@ -1,8 +1,9 @@
-
 const { Pool } = require("pg");
+const http = require("node:http");
 
 const databaseUrl = process.env.DATABASE_URL;
 const intervalMs = Number(process.env.WORKER_INTERVAL_MS || 60000);
+const healthPort = Number(process.env.HEALTH_PORT || 3001);
 
 if (!databaseUrl) {
   console.error("DATABASE_URL is required.");
@@ -11,6 +12,44 @@ if (!databaseUrl) {
 
 const pool = new Pool({
   connectionString: databaseUrl,
+});
+
+let workerReady = false;
+let shuttingDown = false;
+
+const healthServer = http.createServer(async (req, res) => {
+  if (req.method !== "GET" || req.url !== "/health") {
+    res.writeHead(404, { "Content-Type": "application/json" });
+    res.end(JSON.stringify({ status: "not_found" }));
+    return;
+  }
+
+  try {
+    await pool.query("SELECT 1");
+
+    if (!workerReady || shuttingDown) {
+      res.writeHead(503, { "Content-Type": "application/json" });
+      res.end(JSON.stringify({ status: "not_ready" }));
+      return;
+    }
+
+    res.writeHead(200, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        status: "ok",
+        service: "mytasks-worker",
+        database: "connected",
+      })
+    );
+  } catch (error) {
+    res.writeHead(503, { "Content-Type": "application/json" });
+    res.end(
+      JSON.stringify({
+        status: "unhealthy",
+        database: "disconnected",
+      })
+    );
+  }
 });
 
 async function checkOverdueTasks() {
@@ -43,6 +82,7 @@ async function startWorker() {
     console.log("PostgreSQL connection successful.");
 
     await checkOverdueTasks();
+    workerReady = true;
 
     setInterval(async () => {
       try {
@@ -59,12 +99,26 @@ async function startWorker() {
 }
 
 async function shutdown() {
+  if (shuttingDown) return;
+
+  shuttingDown = true;
+  workerReady = false;
+
   console.log("Worker shutting down.");
-  await pool.end();
-  process.exit(0);
+
+  healthServer.close(async () => {
+    try {
+      await pool.end();
+    } finally {
+      process.exit(0);
+    }
+  });
 }
+
+healthServer.listen(healthPort, "0.0.0.0", () => {
+  console.log(`Worker health endpoint listening on port ${healthPort}.`);
+  startWorker();
+});
 
 process.on("SIGTERM", shutdown);
 process.on("SIGINT", shutdown);
-
-startWorker();
